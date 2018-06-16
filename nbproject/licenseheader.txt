@@ -1,0 +1,8 @@
+<#if licenseFirst??>
+${licenseFirst}
+</#if>
+${licensePrefix}Licencia: ver fichero LICENSE en directorio base
+${licensePrefix}Propósito: por definir
+<#if licenseLast??>
+${licenseLast}
+</#if>
