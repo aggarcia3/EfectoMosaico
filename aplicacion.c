@@ -1,6 +1,6 @@
 /*
  * Licencia: ver fichero LICENSE en directorio base
- * Propósito: vista y controlador del efecto. Lógica de negocio
+ * Propósito: vista y controlador del efecto
  */
 
 #include "efecto.h"

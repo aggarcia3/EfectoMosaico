@@ -1,6 +1,6 @@
 /*
  * Licencia: ver fichero LICENSE en directorio base
- * Propósito: implementación del caso de uso de realizar un efecto de mosaico. Lógica del modelo de dominio
+ * Propósito: implementación del caso de uso de realizar un efecto de mosaico
  */
 
 #include "efecto.h"
@@ -99,10 +99,12 @@ codigoResultado prepararImgs(char* rutasImg[]) {
     
     if (imgs[ORIGINAL] && imgs[PATRON]) {
         
-        // Comprobar que son imágenes RGB TrueColor
+        // Comprobar que son imágenes RGB TrueColor de tamaño mayor o igual que LADO_BLOQUExLADO_BLOQUE
         if (imgs[ORIGINAL]->dataOrder == 0 && imgs[PATRON]->dataOrder == imgs[ORIGINAL]->dataOrder
             && imgs[ORIGINAL]->depth == IPL_DEPTH_8U && imgs[PATRON]->depth == imgs[ORIGINAL]->depth
-            && imgs[ORIGINAL]->nChannels == 3 && imgs[PATRON]->nChannels == imgs[ORIGINAL]->nChannels) {
+            && imgs[ORIGINAL]->nChannels == 3 && imgs[PATRON]->nChannels == imgs[ORIGINAL]->nChannels
+            && imgs[ORIGINAL]->width >= LADO_BLOQUE && imgs[ORIGINAL]->height >= LADO_BLOQUE
+            && imgs[PATRON]->width >= LADO_BLOQUE && imgs[PATRON]->height >= LADO_BLOQUE) {
             
             // Armonizar su ancho y alto a un tamaño múltiplo del tamaño de bloque común, si es necesario
             // (Redondea dimensiones a múltiplo más cercano por defecto al tamaño del bloque)
@@ -130,6 +132,16 @@ codigoResultado prepararImgs(char* rutasImg[]) {
         }
     } else {
         toret = ERR_IMGS;
+    }
+    
+    // Liberar recursos si hubo un error
+    if (toret != NO_ERR) {
+        if (imgs[ORIGINAL]) {
+            cvReleaseImage(&imgs[ORIGINAL]);
+        }
+        if (imgs[PATRON]) {
+            cvReleaseImage(&imgs[PATRON]);
+        }
     }
     
     return toret;
