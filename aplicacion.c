@@ -149,7 +149,7 @@ static tecnicaParalelDatos leerTecnicaParalel(char buf[]) {
     // Eliminar \n al final del búfer de entrada
     buf[l] = '\0';
 
-    for (size_t i = 0; i < l && i <= sizeof(cadenasTecParalel[0]); ++i) {
+    for (size_t i = 0; i < l && i < sizeof(cadenasTecParalel[0]); ++i) {
         char c = toupper(buf[i]);   // Convertir a forma neutral
         
         // Ver si hasta el momento estamos coincidiendo con alguna cadena.
