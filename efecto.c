@@ -4,10 +4,23 @@
  */
 
 #include "efecto.h"
+#include "infoCPU.h"
+#include <pthread.h>
 #include <limits.h>
+#include <emmintrin.h>
 
-IplImage* imgsTemp[2];
-paramEfecto p = { 0 };
+typedef struct {
+    void (*copiarBloque) (int i, int j, IplImage* imagenOrigen, int k, int l, IplImage* imagenDestino);
+    unsigned int (*compararBloque) (int filaBloque1, int colBloque1, IplImage* img1, int filaBloque2, int colBloque2, IplImage* img2);
+} estrategiaEfecto;
+typedef struct {
+    pthread_t h;
+    unsigned int idHilo;
+} hilo;
+
+static IplImage* imgsTemp[2];
+static estrategiaEfecto est;
+static hilo* hilos;
 
 // Con enteros sin signo el compilador puede hacer más optimizaciones: le estamos
 // dando a entender que el valor nunca puede ser negativo, no tiene que manejar
@@ -17,9 +30,9 @@ paramEfecto p = { 0 };
 // Las filas y columnas se expresan en unidades de píxeles, no en unidades de
 // bloques (es decir, el bloque 1 empieza en LADO_BLOQUE, no en 1).
 static void* efectoMosaico(void* arg);
-static unsigned int compararBloqueSIMD(int filaBloque1, int colBloque1, IplImage* img1, int filaBloque2, int colBloque2, IplImage* img2);
+static unsigned int compararBloqueSSE2(int filaBloque1, int colBloque1, IplImage* img1, int filaBloque2, int colBloque2, IplImage* img2);
 static unsigned int compararBloqueSISD(int filaBloque1, int colBloque1, IplImage* img1, int filaBloque2, int colBloque2, IplImage* img2);
-static void copiarBloqueSIMD(int i, int j, IplImage* imagenOrigen, int k, int l, IplImage* imagenDestino);
+static void copiarBloqueSSE2(int i, int j, IplImage* imagenOrigen, int k, int l, IplImage* imagenDestino);
 static void copiarBloqueSISD(int i, int j, IplImage* imagenOrigen, int k, int l, IplImage* imagenDestino);
 
 static void* efectoMosaico(void* arg) {
@@ -27,14 +40,14 @@ static void* efectoMosaico(void* arg) {
     unsigned int difActual, menorDiferencia;
     int k, l;
     
-    for (int i = idHilo * LADO_BLOQUE; i < imgs[ORIGINAL]->height; i += p.nHilos * LADO_BLOQUE) {
+    for (int i = idHilo * LADO_BLOQUE; i < imgs[ORIGINAL]->height; i += nHilos * LADO_BLOQUE) {
         for (int j = 0; j < imgs[ORIGINAL]->width; j += LADO_BLOQUE) {
             // Para el bloque (i, j) de la imagen original, hallar el bloque (k, l) más parecido de la imagen patrón
             menorDiferencia = UINT_MAX;
             for (int u = 0; u < imgs[PATRON]->height; u += LADO_BLOQUE) {
                 for (int v = 0; v < imgs[PATRON]->width; v += LADO_BLOQUE) {
                     // Si este bloque es más parecido que otro anterior para el bloque (i, j), guardar su referencia
-                    difActual = (*p.estCompararBloque)(i, j, imgs[ORIGINAL], u, v, imgs[PATRON]);
+                    difActual = (*est.compararBloque)(i, j, imgs[ORIGINAL], u, v, imgs[PATRON]);
                     if (difActual < menorDiferencia) {
                         k = u;
                         l = v;
@@ -42,14 +55,27 @@ static void* efectoMosaico(void* arg) {
                     }
                 }
             }
-            (*p.estCopiarBloque)(k, l, imgs[PATRON], i, j, imgs[ORIGINAL]);
+            (*est.copiarBloque)(k, l, imgs[PATRON], i, j, imgs[ORIGINAL]);
         }
     }
 }
 
-static unsigned int compararBloqueSIMD(int filaBloque1, int colBloque1, IplImage* img1, int filaBloque2, int colBloque2, IplImage* img2) {
-    // TODO
-    return 0;
+static unsigned int compararBloqueSSE2(int filaBloque1, int colBloque1, IplImage* img1, int filaBloque2, int colBloque2, IplImage* img2) {
+    int toret = 0;
+
+    for (int fila = 0; fila < LADO_BLOQUE; ++fila) {
+        __m128i* fila1 = (__m128i*) (img1->imageData + (filaBloque1 + fila) * img1->widthStep + 3 * colBloque1);
+        __m128i* fila2 = (__m128i*) (img2->imageData + (filaBloque2 + fila) * img2->widthStep + 3 * colBloque2);
+
+        // En 3 __m128i caben 16 píxeles exactos
+        for (int columna = 0; columna < LADO_BLOQUE / 16 * 3; ++columna) {
+            __m128i a = _mm_sad_epu8(_mm_load_si128(fila1++), _mm_load_si128(fila2++)); // HI PAD LO
+            __m128i b = _mm_srli_si128(a, 8);
+            toret += _mm_cvtsi128_si32(_mm_add_epi32(a, b));
+        }
+    }
+
+    return toret;
 }
 
 static unsigned int compararBloqueSISD(int filaBloque1, int colBloque1, IplImage* img1, int filaBloque2, int colBloque2, IplImage* img2) {
@@ -71,8 +97,16 @@ static unsigned int compararBloqueSISD(int filaBloque1, int colBloque1, IplImage
     return toret;
 }
 
-static void copiarBloqueSIMD(int i, int j, IplImage* imagenOrigen, int k, int l, IplImage* imagenDestino) {
-    // TODO
+static void copiarBloqueSSE2(int i, int j, IplImage* imagenOrigen, int k, int l, IplImage* imagenDestino) {
+    for (int fila = 0; fila < LADO_BLOQUE; ++fila) {
+        __m128i* filaOrigen = (__m128i*) (imagenOrigen->imageData + (i + fila) * imagenOrigen->widthStep + 3 * j);
+        __m128i* filaDestino = (__m128i*) (imagenDestino->imageData + (k + fila) * imagenDestino->widthStep + 3 * l);
+
+        // En 3 __m128i caben 16 píxeles exactos de 3 componentes de color
+        for (int columna = 0; columna < LADO_BLOQUE / 16 * 3; ++columna) {
+            _mm_store_si128(filaDestino++, _mm_load_si128(filaOrigen++));
+        }
+    }
 }
 
 static void copiarBloqueSISD(int i, int j, IplImage* imagenOrigen, int k, int l, IplImage* imagenDestino) {
@@ -147,27 +181,53 @@ codigoResultado prepararImgs(char* rutasImg[]) {
     return toret;
 }
 
-void concretarEstrategia(int usarSIMD) {
-    if (usarSIMD) {
-        p.estCompararBloque = &compararBloqueSIMD;
-        p.estCopiarBloque = &copiarBloqueSIMD;
+codigoResultado configurar(tecnicaParalelDatos t) {
+    codigoResultado toret = NO_ERR;
+    
+    hilos = malloc(sizeof(hilo) * nHilos);
+    
+    if (hilos) {
+        switch (t) {
+            case SISD: {
+                est.compararBloque = &compararBloqueSISD;
+                est.copiarBloque = &copiarBloqueSISD;
+                break;
+            }
+            case SSE2: {
+                if (soportaSSE2()) {
+                    est.compararBloque = &compararBloqueSSE2;
+                    est.copiarBloque = &copiarBloqueSSE2;
+                } else {
+                    toret = ERR_NO_SOPORTADO;
+                }
+                break;
+            }
+            default: {
+                toret = ERR_ASERCION;
+            }
+        }
     } else {
-        p.estCompararBloque = &compararBloqueSISD;
-        p.estCopiarBloque = &copiarBloqueSISD;
+        toret = ERR_MEM;
     }
+    
+    if (toret != NO_ERR && hilos) {
+        free(hilos);
+    }
+    
+    return toret;
 }
 
 codigoResultado iniciar() {
     codigoResultado toret = NO_ERR;
     
-    for (unsigned int i = 0; i < p.nHilos; ++i) {
+    for (unsigned int i = 0; i < nHilos; ++i) {
         hilos[i].idHilo = i;
         if (pthread_create(&hilos[i].h, NULL, &efectoMosaico, &hilos[i].idHilo)) {
             toret = ERR_HILO;
         }
     }
 
-    for (unsigned int i = 0; i < p.nHilos; ++i) {
+    for (unsigned int i = 0; i < nHilos; ++i) {
         // Intentamos esperar por todos los hilos, aunque haya ocurrido
         // algún error creando alguno. Los hilos pueden estar usando
         // datos de imagen
