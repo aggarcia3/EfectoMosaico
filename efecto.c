@@ -61,7 +61,8 @@ static void* efectoMosaico(void* arg) {
 }
 
 static unsigned int compararBloqueSSE2(int filaBloque1, int colBloque1, IplImage* img1, int filaBloque2, int colBloque2, IplImage* img2) {
-    int toret = 0;
+    __m128i acumulador = _mm_set1_epi64x(0);
+    __m128i temp;
 
     for (int fila = 0; fila < LADO_BLOQUE; ++fila) {
         __m128i* fila1 = (__m128i*) (img1->imageData + (filaBloque1 + fila) * img1->widthStep + 3 * colBloque1);
@@ -69,13 +70,15 @@ static unsigned int compararBloqueSSE2(int filaBloque1, int colBloque1, IplImage
 
         // En 3 __m128i caben 16 píxeles exactos
         for (int columna = 0; columna < LADO_BLOQUE / 16 * 3; ++columna) {
-            __m128i a = _mm_sad_epu8(_mm_load_si128(fila1++), _mm_load_si128(fila2++)); // HI PAD LO
-            __m128i b = _mm_srli_si128(a, 8);
-            toret += _mm_cvtsi128_si32(_mm_add_epi32(a, b));
+            __m128i sad = _mm_sad_epu8(_mm_load_si128(fila1++), _mm_load_si128(fila2++));
+            acumulador = _mm_add_epi32(acumulador, sad);
         }
     }
-
-    return toret;
+    
+    // En acumulador quedan dos enteros de 32 bits, agrupados en elementos de
+    // 64 bits dentro del registro (que es de 128 bits o 16 bytes)
+    temp = _mm_srli_si128(acumulador, 8);
+    return _mm_cvtsi128_si32(_mm_add_epi32(acumulador, temp));
 }
 
 static unsigned int compararBloqueSISD(int filaBloque1, int colBloque1, IplImage* img1, int filaBloque2, int colBloque2, IplImage* img2) {
